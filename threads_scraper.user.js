@@ -376,13 +376,18 @@
         const dl = document.getElementById('ts-dl');
         const csv = document.getElementById('ts-csv');
         const md = document.getElementById('ts-md');
+        const hasData = collectedPosts.size > 0;
         if (state === 'run') {
+            // Actively scrolling the timeline: nothing to download yet.
             go.disabled = true; stop.disabled = false; dl.disabled = true; csv.disabled = true; md.disabled = true;
+        } else if (state === 'enhance') {
+            // Timeline is captured; a slower enhancement pass (threads/comments)
+            // is still running. Let the user download now or stop early.
+            go.disabled = true; stop.disabled = false;
+            dl.disabled = !hasData; csv.disabled = !hasData; md.disabled = !hasData;
         } else {
             go.disabled = false; stop.disabled = true;
-            dl.disabled = collectedPosts.size === 0;
-            csv.disabled = collectedPosts.size === 0;
-            md.disabled = collectedPosts.size === 0;
+            dl.disabled = !hasData; csv.disabled = !hasData; md.disabled = !hasData;
         }
     }
 
@@ -590,9 +595,15 @@
             }
         }
 
+        // Timeline is done. Surface the download buttons NOW so the basic scrape
+        // is available immediately, even while the slower passes below run.
+        if ((authorThreads || deepMode) && !shouldStop) {
+            setBtns('enhance');
+        }
+
         // Phase 3: Author threads — recover full multi-part threads (main + all sub-posts)
         if (authorThreads && !shouldStop) {
-            log('🧵 Author threads: recovering full sub-posts...');
+            log(`🧵 Author threads: scanning ${collectedPosts.size} posts (you can download now or stop early)...`);
             await scrapeAuthorThreads(delay);
         }
 
