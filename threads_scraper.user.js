@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Threads Full Post Scraper (DOM)
 // @namespace    https://threads.com/
-// @version      4.4.0
-// @description  Scrape semua post + replies user Threads via DOM parsing. Zero setup, no ad blocker issues.
+// @version      4.5.0
+// @description  Scrape semua post + replies user Threads via DOM parsing. Zero setup, no ad blocker issues. v4.5: mod "Author threads" tarik semua sub-post satu utas (main + sub) dari JSON page.
 // @author       You
 // @match        https://www.threads.net/@*
 // @match        https://www.threads.com/@*
@@ -267,7 +267,7 @@
             <div class="ts-header">
                 <div class="ts-title">
                     <span>Threads Scraper</span>
-                    <span class="ts-badge">v4.4</span>
+                    <span class="ts-badge">v4.5</span>
                 </div>
                 <button class="close-btn" id="ts-x">✕</button>
             </div>
@@ -280,6 +280,11 @@
             <div class="ts-switch" id="ts-switch-replies">
                 <span class="ts-switch-label">Include replies tab</span>
                 <div class="ts-toggle active" id="ts-toggle-replies"></div>
+            </div>
+
+            <div class="ts-switch" id="ts-switch-authorthreads">
+                <span class="ts-switch-label">Author threads (full sub-posts)</span>
+                <div class="ts-toggle" id="ts-toggle-authorthreads"></div>
             </div>
 
             <div class="ts-switch" id="ts-switch-deep">
@@ -337,6 +342,11 @@
         const toggle = document.getElementById('ts-toggle-replies');
         document.getElementById('ts-switch-replies').onclick = () => {
             toggle.classList.toggle('active');
+        };
+
+        const toggleAuthor = document.getElementById('ts-toggle-authorthreads');
+        document.getElementById('ts-switch-authorthreads').onclick = () => {
+            toggleAuthor.classList.toggle('active');
         };
 
         const toggleDeep = document.getElementById('ts-toggle-deep');
@@ -549,6 +559,7 @@
 
         const delay = parseInt(document.getElementById('ts-delay').value) || CONFIG.scrollDelay;
         const includeReplies = document.getElementById('ts-toggle-replies').classList.contains('active');
+        const authorThreads = document.getElementById('ts-toggle-authorthreads').classList.contains('active');
         const deepMode = document.getElementById('ts-toggle-deep').classList.contains('active');
 
         log('🚀 Starting...');
@@ -579,7 +590,13 @@
             }
         }
 
-        // Phase 3: Deep mode — open each post and scrape comments
+        // Phase 3: Author threads — recover full multi-part threads (main + all sub-posts)
+        if (authorThreads && !shouldStop) {
+            log('🧵 Author threads: recovering full sub-posts...');
+            await scrapeAuthorThreads(delay);
+        }
+
+        // Phase 4: Deep mode — open each post and scrape comments
         if (deepMode && !shouldStop) {
             log('🔍 Deep mode: scraping comments...');
             await scrapeDeepComments(delay);
@@ -677,6 +694,139 @@
             if ((t === 'threads' || t === 'thread') && el.offsetParent) return el;
         }
         return null;
+    }
+
+    // ==================== AUTHOR THREADS ====================
+    // For every collected post, fetch its page JSON and pull the FULL thread:
+    // the author's own main post + all continuation sub-posts, in order.
+    // A single fetch of any part returns the whole thread, so parts already
+    // recovered are skipped. Non-thread single posts are left untouched.
+    async function scrapeAuthorThreads(delay) {
+        const pathMatch = window.location.pathname.match(/^\/@([^/]+)/);
+        const creator = pathMatch ? pathMatch[1] : '';
+        if (!creator) { log('⚠️ Cannot detect profile username'); return; }
+
+        const posts = Array.from(collectedPosts.values());
+        const doneCodes = new Set();
+        let threadsFound = 0;
+        let subPostsAdded = 0;
+        let checked = 0;
+
+        for (const post of posts) {
+            if (shouldStop) break;
+            if (!post.code || doneCodes.has(post.code)) continue;
+            checked++;
+
+            let parts = [];
+            try {
+                parts = await fetchAuthorThread(post.url || post.code, creator);
+            } catch (e) {
+                parts = [];
+            }
+
+            // Mark every recovered part so we do not refetch the same thread.
+            for (const p of parts) if (p.code) doneCodes.add(p.code);
+
+            if (parts.length > 1) {
+                threadsFound++;
+                // Attach the full thread to its ROOT (earliest) part.
+                const root = parts[0];
+                const rootEntry = collectedPosts.get(root.code) || {
+                    code: root.code,
+                    username: creator,
+                    text: root.text || '',
+                    time: root.time || '',
+                    like_count: 0,
+                    images: [],
+                    has_video: false,
+                    url: root.url,
+                };
+                if (!rootEntry.text && root.text) rootEntry.text = root.text;
+                rootEntry.is_thread = true;
+                rootEntry.thread_count = parts.length;
+                rootEntry.thread_parts = parts.map((p, i) => ({
+                    index: i + 1,
+                    code: p.code,
+                    text: p.text,
+                    time: p.time,
+                    url: p.url,
+                }));
+                collectedPosts.set(root.code, rootEntry);
+                subPostsAdded += parts.length - 1;
+
+                // Tag the other parts so they are not treated as standalone posts.
+                for (let i = 1; i < parts.length; i++) {
+                    const part = parts[i];
+                    const partEntry = collectedPosts.get(part.code);
+                    if (partEntry) {
+                        partEntry.part_of_thread = root.code;
+                        partEntry.thread_index = i + 1;
+                    }
+                }
+
+                log(`🧵 ${threadsFound}: ${root.code} → ${parts.length} parts`);
+            }
+
+            if (checked % 10 === 0) log(`🧵 checked ${checked}/${posts.length}...`);
+            await sleep(Math.max(600, delay) + Math.random() * 600);
+        }
+
+        log(`🧵 Author threads done: ${threadsFound} threads, +${subPostsAdded} sub-posts recovered`);
+    }
+
+    // Fetch one post page and return the author's own posts in the thread,
+    // deduped by code and sorted oldest-first (main post is index 0).
+    async function fetchAuthorThread(urlOrCode, creator) {
+        const url = urlOrCode.startsWith('http')
+            ? urlOrCode
+            : `https://${window.location.hostname}/@${creator}/post/${urlOrCode}`;
+        const creatorLower = (creator || '').toLowerCase();
+        const byCode = new Map();
+
+        const resp = await fetch(url, {
+            headers: { 'Accept': 'text/html' },
+            credentials: 'include',
+        });
+        if (!resp.ok) return [];
+
+        const html = await resp.text();
+        const scriptRegex = /<script[^>]*type="application\/json"[^>]*data-sjs[^>]*>([\s\S]*?)<\/script>/g;
+        let match;
+
+        while ((match = scriptRegex.exec(html)) !== null) {
+            const content = match[1];
+            if (!content.includes('thread_items')) continue;
+
+            let data;
+            try { data = JSON.parse(content); } catch (e) { continue; }
+
+            const threadItems = findNestedKey(data, 'thread_items');
+            for (const items of threadItems) {
+                if (!Array.isArray(items)) continue;
+                for (const item of items) {
+                    const post = item?.post;
+                    if (!post) continue;
+                    const username = (post.user?.username || '').toLowerCase();
+                    if (username !== creatorLower) continue; // author's own posts only
+                    const code = post.code || '';
+                    if (!code) continue;
+                    if (!byCode.has(code)) {
+                        byCode.set(code, {
+                            code,
+                            text: post.caption?.text || '',
+                            time: post.taken_at ? new Date(post.taken_at * 1000).toISOString() : '',
+                            taken_at: post.taken_at || 0,
+                            username: post.user?.username || creator,
+                            url: `https://${window.location.hostname}/@${post.user?.username || creator}/post/${code}`,
+                        });
+                    }
+                }
+            }
+        }
+
+        const arr = Array.from(byCode.values());
+        arr.sort((a, b) => (a.taken_at || 0) - (b.taken_at || 0));
+        return arr;
     }
 
     // ==================== DEEP MODE ====================
@@ -854,12 +1004,16 @@
         const username = pathMatch ? pathMatch[1] : 'unknown';
 
         const totalComments = posts.reduce((sum, p) => sum + (p.conversations?.length || 0), 0);
+        const totalThreads = posts.filter(p => p.is_thread).length;
+        const totalSubPosts = posts.reduce((sum, p) => sum + (p.thread_parts ? p.thread_parts.length - 1 : 0), 0);
 
         const result = {
             username,
             url: window.location.href,
             total: posts.length,
             total_with_text: posts.filter(p => p.text).length,
+            total_threads: totalThreads,
+            total_sub_posts: totalSubPosts,
             total_conversations: totalComments,
             scraped_at: new Date().toISOString(),
             posts,
@@ -926,12 +1080,19 @@
         md += `---\n\n`;
 
         for (const post of posts) {
+            // Skip parts that belong to a thread — rendered under their root.
+            if (post.part_of_thread) continue;
+
             // Post header
             const date = post.time ? new Date(post.time).toLocaleDateString('id-ID', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
-            md += `## ${date}\n\n`;
+            md += `## ${date}${post.is_thread ? ` — 🧵 Thread (${post.thread_count} parts)` : ''}\n\n`;
 
-            // Post text
-            if (post.text) {
+            // Post text — a thread renders all its numbered parts (main + sub-posts)
+            if (post.is_thread && post.thread_parts && post.thread_parts.length > 0) {
+                for (const part of post.thread_parts) {
+                    md += `**${part.index}.** ${part.text || '*(no text)*'}\n\n`;
+                }
+            } else if (post.text) {
                 md += `${post.text}\n\n`;
             } else {
                 md += `*(no text — image/video only)*\n\n`;
