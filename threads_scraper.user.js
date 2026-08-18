@@ -2,7 +2,7 @@
 // @name         Threads Full Post Scraper (DOM)
 // @namespace    https://threads.com/
 // @version      4.5.0
-// @description  Scrape semua post + replies user Threads via DOM parsing. Zero setup, no ad blocker issues. v4.5: mod "Author threads" tarik semua sub-post satu utas (main + sub) dari JSON page.
+// @description  Scrape a Threads user's posts + replies via DOM parsing. Zero setup, no ad blocker issues. v4.5: "Author threads" mode recovers every sub-post of a thread (main + subs) from the page JSON.
 // @author       You
 // @match        https://www.threads.net/@*
 // @match        https://www.threads.com/@*
@@ -42,7 +42,12 @@
             max-width: 360px;
             box-shadow: 0 24px 48px -12px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.03);
             backdrop-filter: blur(12px);
+            max-height: calc(100vh - 32px);
+            overflow-y: auto;
         }
+        #ts-panel::-webkit-scrollbar { width: 6px; }
+        #ts-panel::-webkit-scrollbar-track { background: transparent; }
+        #ts-panel::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 6px; }
 
         #ts-panel .ts-header {
             display: flex;
@@ -177,6 +182,42 @@
             margin-bottom: 14px;
         }
 
+        #ts-panel .ts-row {
+            display: flex;
+            gap: 8px;
+        }
+        #ts-panel .ts-row .btn-go { flex: 3; }
+        #ts-panel .ts-row .btn-stop { flex: 1; }
+
+        #ts-panel .ts-spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(9,9,11,0.25);
+            border-top-color: #09090b;
+            border-radius: 50%;
+            animation: ts-spin 0.7s linear infinite;
+            display: inline-block;
+        }
+        @keyframes ts-spin { to { transform: rotate(360deg); } }
+
+        #ts-panel .ts-dl-menu {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 8px;
+            padding: 8px;
+            background: #0c0c0e;
+            border: 1px solid #27272a;
+            border-radius: 10px;
+        }
+        #ts-panel .btn-dl-main::after {
+            content: '▾';
+            font-size: 11px;
+            margin-left: 2px;
+            transition: transform 0.15s ease;
+        }
+        #ts-panel .btn-dl-main.open::after { transform: rotate(180deg); }
+
         #ts-panel .btn {
             display: flex;
             align-items: center;
@@ -304,26 +345,35 @@
             </div>
 
             <div class="ts-actions">
-                <button class="btn btn-go" id="ts-go">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>
-                    Start Scraping
-                </button>
-                <button class="btn btn-stop" id="ts-stop" disabled>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
-                    Stop
-                </button>
-                <button class="btn btn-dl" id="ts-dl" disabled>
+                <div class="ts-row">
+                    <button class="btn btn-go" id="ts-go">
+                        <span class="ts-spinner" id="ts-spin" style="display:none;"></span>
+                        <svg id="ts-go-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                        <span id="ts-go-label">Start Scraping</span>
+                    </button>
+                    <button class="btn btn-stop" id="ts-stop" disabled>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+                        Stop
+                    </button>
+                </div>
+                <button class="btn btn-dl-main" id="ts-dl-main" disabled>
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-                    JSON
+                    Download
                 </button>
-                <button class="btn btn-csv" id="ts-csv" disabled>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/></svg>
-                    CSV
-                </button>
-                <button class="btn btn-csv" id="ts-md" disabled>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
-                    Markdown
-                </button>
+                <div class="ts-dl-menu" id="ts-dl-menu" style="display:none;">
+                    <button class="btn btn-dl" id="ts-dl">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/></svg>
+                        JSON
+                    </button>
+                    <button class="btn btn-csv" id="ts-csv">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/></svg>
+                        CSV
+                    </button>
+                    <button class="btn btn-csv" id="ts-md">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
+                        Markdown
+                    </button>
+                </div>
             </div>
 
             <div class="ts-log" id="ts-log">
@@ -338,6 +388,15 @@
         document.getElementById('ts-dl').onclick = downloadJSON;
         document.getElementById('ts-csv').onclick = downloadCSV;
         document.getElementById('ts-md').onclick = downloadMarkdown;
+
+        // Download button reveals the format options.
+        const dlMain = document.getElementById('ts-dl-main');
+        const dlMenu = document.getElementById('ts-dl-menu');
+        dlMain.onclick = () => {
+            const open = dlMenu.style.display === 'none';
+            dlMenu.style.display = open ? 'flex' : 'none';
+            dlMain.classList.toggle('open', open);
+        };
 
         const toggle = document.getElementById('ts-toggle-replies');
         document.getElementById('ts-switch-replies').onclick = () => {
@@ -373,21 +432,27 @@
     function setBtns(state) {
         const go = document.getElementById('ts-go');
         const stop = document.getElementById('ts-stop');
-        const dl = document.getElementById('ts-dl');
-        const csv = document.getElementById('ts-csv');
-        const md = document.getElementById('ts-md');
+        const dlMain = document.getElementById('ts-dl-main');
+        const spin = document.getElementById('ts-spin');
+        const goIcon = document.getElementById('ts-go-icon');
+        const goLabel = document.getElementById('ts-go-label');
         const hasData = collectedPosts.size > 0;
+        const busy = state === 'run' || state === 'enhance';
+
+        // Spinner + label while working.
+        if (spin) spin.style.display = busy ? 'inline-block' : 'none';
+        if (goIcon) goIcon.style.display = busy ? 'none' : 'inline-block';
+        if (goLabel) goLabel.textContent = busy ? 'Scraping…' : 'Start Scraping';
+
         if (state === 'run') {
             // Actively scrolling the timeline: nothing to download yet.
-            go.disabled = true; stop.disabled = false; dl.disabled = true; csv.disabled = true; md.disabled = true;
+            go.disabled = true; stop.disabled = false; if (dlMain) dlMain.disabled = true;
         } else if (state === 'enhance') {
-            // Timeline is captured; a slower enhancement pass (threads/comments)
-            // is still running. Let the user download now or stop early.
-            go.disabled = true; stop.disabled = false;
-            dl.disabled = !hasData; csv.disabled = !hasData; md.disabled = !hasData;
+            // Timeline captured; a slower pass (threads/comments) is still running.
+            // Let the user download now or stop early.
+            go.disabled = true; stop.disabled = false; if (dlMain) dlMain.disabled = !hasData;
         } else {
-            go.disabled = false; stop.disabled = true;
-            dl.disabled = !hasData; csv.disabled = !hasData; md.disabled = !hasData;
+            go.disabled = false; stop.disabled = true; if (dlMain) dlMain.disabled = !hasData;
         }
     }
 
